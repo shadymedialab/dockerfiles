@@ -16,12 +16,10 @@ function change_shell() {
 
     case ${shell_name} in
         bash)
-            echo "'bash' is selected"
             find ${SCRIPT_DIR}/../ -type f -name "Dockerfile" -exec sed -i "/${target_string1}/d" {} \;
             find ${SCRIPT_DIR}/../ -type f -name "Dockerfile" -exec sed -i "/${target_string2}/d" {} \;
             ;;
         zsh)
-            echo "'zsh' is selected"
             for distro_dir in ${DISTROS_USED_ZSH[@]}; do
                 for target_string in "${target_string1}" "${target_string2}"; do
                     count=$(grep -c "${target_string}" ${SCRIPT_DIR}/../${distro_dir}/Dockerfile)
@@ -32,11 +30,14 @@ function change_shell() {
             done
             ;;
         *)
-            echo "Invalid shell name: ${shell_name}"
+            echo -e "\e[31mError: Invalid shell name: ${shell_name}\e[m"
             show_usage
             exit 1
             ;;
     esac
+
+    echo ""
+    echo "'${shell_name}' is selected"
 }
 
 function main() {
