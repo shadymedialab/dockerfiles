@@ -2,18 +2,33 @@
 
 SCRIPT_DIR=$(cd $(dirname $0); pwd)
 DISTROS=$(ls -d ${SCRIPT_DIR}/../*/ | sed 's|'${SCRIPT_DIR}\/..\/'||g' | sed 's/\///g')
-GIT_USER=$(git config user.name)
-GIT_EMAIL=$(git config user.email)
-SEARCH_STRING_GIT="user.name"
-TARGET_STRING_GIT="RUN git config --global user.name \"${GIT_USER}\" && git config --global user.email \"${GIT_EMAIL}\""
-SEARCH_STRINGS_SSH=(
-    "/home/user/.ssh"
-    "volumes:"
+INVALID_DISTROS=("scripts")
+
+ERROR_COUNT=0
+
+# git
+TARGET_FILE_NAME_GIT="docker-compose.yml"
+INSERT_POINT_STRING_GIT="environment:"
+# You should set unique element in the target file at the end of the array to avoid deleting other lines.
+# TARGET_STRINGS_GIT is inserted once in the line following INSERT_POINT_STRING_GIT.
+TARGET_STRINGS_GIT=(
+    "\      GIT_USER_NAME: $(git config user.name)"
+    "\      GIT_USER_EMAIL: $(git config user.email)"
 )
-TARGET_STRING_SSH="\      - type: bind\n        source: ~/.ssh\n        target: /home/user/.ssh"
+
+# ssh
+TARGET_FILE_NAME_SSH="docker-compose.yml"
+INSERT_POINT_STRING_SSH="volumes:"
+# You should set unique element in the target file at the end of the array to avoid deleting other lines.
+# TARGET_STRINGS_SSH is inserted once in the line following INSERT_POINT_STRING_SSH.
+TARGET_STRINGS_SSH=(
+    "\      - type: bind"
+    "\        source: ~/.ssh"
+    "\        target: /home/user/.ssh"
+)
 
 function check_git_user() {
-    if [[ ! -z ${GIT_USER} && ! -z ${GIT_EMAIL} ]]; then
+    if [[ -n $(git config --global user.name) && -n $(git config --global user.email) ]]; then
         return
     fi
     echo ""
@@ -42,46 +57,97 @@ function show_usage() {
     echo "    Disable git sync: $0 disable"
 }
 
-function enable_git_sync() {
-    for distro in ${DISTROS[@]}; do
-        if [[ ${distro} != "scripts" ]]; then
-            local target_file=${SCRIPT_DIR}/../${distro}/Dockerfile
-            local count=$(grep -c ${SEARCH_STRING_GIT} ${target_file})
-            if [[ ${count} -eq 0 ]]; then
-                echo ${TARGET_STRING_GIT} | sed 's/\\//g' >> ${target_file}
-            fi
+function is_invalid_distro() {
+    local distro=$1
+    for invalid_distro in ${INVALID_DISTROS[@]}; do
+        if [[ ${distro} == ${invalid_distro} ]]; then
+            return 0
+        fi
+    done
+    return 1
+}
 
-            target_file=${SCRIPT_DIR}/../${distro}/docker-compose.yml
-            count=$(grep -c ${SEARCH_STRINGS_SSH[0]} ${target_file})
-            if [[ ${count} -eq 0 ]]; then
-                local target_line=$(grep -n "${SEARCH_STRINGS_SSH[1]}" ${target_file} | cut -d ":" -f 1 | head -n 1)
-                sed -i "${target_line}a ${TARGET_STRING_SSH}" ${target_file}
+function delete_config() {
+    local file_name=$1
+    shift 1
+    local target_strings=("$@")
+
+    for distro in ${DISTROS[@]}; do
+        if ! is_invalid_distro ${distro}; then
+            local target_file=${SCRIPT_DIR}/../${distro}/${file_name}
+            local target_line=$(grep -n "${target_strings[-1]}" ${target_file} | cut -d ":" -f 1 | head -n 1)
+            if [[ -n ${target_line} ]]; then
+                sed -i "$((target_line - ${#target_strings[@]} + 1)),$((target_line))d" ${target_file}
+            else
+                ERROR_COUNT=$((ERROR_COUNT + 1))
             fi
         fi
     done
+}
 
-    echo ""
-    echo "Enabled git sync"
-    echo ""
-    echo -e "\e[33m(If you want to disable git sync, please run '$0 disable')\e[m"
+function insert_lines() {
+    local target_file=$1
+    local search_string=$2
+    shift 2
+    local target_strings=("$@")
+
+    for ((i=${#target_strings[@]}-1; i>=0; i--)); do
+        local target_line=$(grep -n "${search_string}" ${target_file} | cut -d ":" -f 1 | head -n 1)
+        if [[ -n ${target_line} ]]; then
+            sed -i "${target_line}a ${target_strings[i]}" ${target_file}
+        else
+            echo -e "\e[33mError: '${search_string}' not found in ${target_file}. Failed to insert target strings.\e[m"
+            ERROR_COUNT=$((ERROR_COUNT + 1))
+        fi
+    done
+}
+
+function add_config() {
+    local file_name=$1
+    local search_string=$2
+    shift 2
+    local target_strings=("$@")
+
+    for distro in ${DISTROS[@]}; do
+        if ! is_invalid_distro ${distro}; then
+            local target_file=${SCRIPT_DIR}/../${distro}/${file_name}
+            insert_lines ${target_file} ${search_string} "${target_strings[@]}"
+        fi
+    done
+}
+
+function enable_git_sync() {
+    # delete config
+    delete_config ${TARGET_FILE_NAME_GIT} "${TARGET_STRINGS_GIT[@]}"
+    delete_config ${TARGET_FILE_NAME_SSH} "${TARGET_STRINGS_SSH[@]}"
+
+    # add config
+    ERROR_COUNT=0
+    add_config ${TARGET_FILE_NAME_GIT} ${INSERT_POINT_STRING_GIT} "${TARGET_STRINGS_GIT[@]}"
+    add_config ${TARGET_FILE_NAME_SSH} ${INSERT_POINT_STRING_SSH} "${TARGET_STRINGS_SSH[@]}"
+
+    if [[ ${ERROR_COUNT} -ne 0 ]]; then
+        echo -e "\e[31mFailed to enable git sync\e[m"
+        exit 1
+    else
+        echo ""
+        echo "Enabled git sync"
+        echo ""
+        echo -e "\e[33m(If you want to disable git sync, please run '$0 disable')\e[m"
+    fi
 }
 
 function disable_git_sync() {
-    find ${SCRIPT_DIR}/../ -type f -name "Dockerfile" -exec sed -i "/${SEARCH_STRING_GIT}/d" {} \;
+    delete_config ${TARGET_FILE_NAME_GIT} "${TARGET_STRINGS_GIT[@]}"
+    delete_config ${TARGET_FILE_NAME_SSH} "${TARGET_STRINGS_SSH[@]}"
 
-    for distro in ${DISTROS[@]}; do
-        if [[ ${distro} != "scripts" ]]; then
-            local target_file=${SCRIPT_DIR}/../${distro}/docker-compose.yml
-            local count=$(grep -c ${SEARCH_STRINGS_SSH[0]} ${target_file})
-            if [[ ${count} -ne 0 ]]; then
-                local target_line=$(grep -n "${SEARCH_STRINGS_SSH[0]}" ${target_file} | cut -d ":" -f 1 | head -n 1)
-                sed -i "$((target_line - 2)),$((target_line))d" ${target_file}
-            fi
-        fi
-    done
-
-    echo ""
-    echo "Disabled git sync"
+    if [[ ${ERROR_COUNT} -ne 0 ]]; then
+        echo -e "\e[31mFailed to disable git sync or git sync is already disabled\e[m"
+        exit 1
+    else
+        echo ""
+        echo "Disabled git sync"
+    fi
 }
 
 function main() {
