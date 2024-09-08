@@ -31,12 +31,13 @@ function show_usage() {
 function disable_gpu() {
     delete_lines_all_distros ${TARGET_FILE_NAME} "${TARGET_STRINGS[@]}"
 
+    ERROR_COUNT_OF_DELETE_LINES=$((ERROR_COUNT_OF_DELETE_LINES - ${#DISTROS_NOT_SUPPORT_GPU[@]}))
     if [[ ${ERROR_COUNT_OF_DELETE_LINES} -eq 0 ]]; then
         echo ""
         echo "Disabled GPU"
     else
         echo ""
-        echo -e "\e[31mFailed to disable GPU or GPU is already disabled\e[m"
+        printf "\e[31mFailed to disable GPU or GPU is already disabled\e[m\n"
         exit 1
     fi
 }
@@ -56,7 +57,7 @@ function enable_gpu() {
         echo "Enabled GPU"
     else
         echo ""
-        echo -e "\e[31mFailed to enable GPU\e[m"
+        printf "\e[31mFailed to enable GPU\e[m\n"
         exit 1
     fi
 }
